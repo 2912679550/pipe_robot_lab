@@ -17,346 +17,268 @@ import torch
 import carb.input
 import omni.appwindow # 新增导入
 import math
-import isaaclab.sim as sim_utils
-from isaaclab.utils import configclass
-from isaaclab.actuators import ImplicitActuatorCfg
-from isaaclab.assets import AssetBaseCfg, ArticulationCfg
-from isaaclab.scene import InteractiveSceneCfg
-from isaaclab.envs import ManagerBasedRLEnvCfg, ManagerBasedRLEnv
-from isaaclab.managers import SceneEntityCfg
-from isaaclab.managers import ObservationGroupCfg as ObsGroup
-from isaaclab.managers import ObservationTermCfg as ObsTerm
-from isaaclab.managers import ActionTermCfg as ActionTerm
-from isaaclab.managers import EventTermCfg as EventTerm
-import isaaclab.envs.mdp as mdp
+from isaaclab.envs import ManagerBasedRLEnv
+from pipe_robot_env import PipeRobotEnvCfg
 
-
-# =============================================================================
-# 1. 机器人资产配置 (Robot Asset Configuration)
-# =============================================================================
-PIPE_ROBOT_CFG = ArticulationCfg(
-    spawn=sim_utils.UsdFileCfg(
-        usd_path="/home/vulcan/Academic/pipe_robot_lab/source/model/pipe_robot/USD/pipe_robot_rename/pipe_robot_rename.usd",
-        rigid_props=sim_utils.RigidBodyPropertiesCfg(
-            disable_gravity=False,
-            retain_accelerations=False,
-            linear_damping=0.0,
-            angular_damping=0.0,
-            max_linear_velocity=1000.0,
-            max_angular_velocity=1000.0,
-            max_depenetration_velocity=1.0,
-        ),
-        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
-            enabled_self_collisions=False,
-            solver_position_iteration_count=4,
-            solver_velocity_iteration_count=4,
-        ),
-    ),
-    init_state=ArticulationCfg.InitialStateCfg(
-        pos=(0.0, 0.0, 0.8),
-        rot=(1.0, 0.0, 0.0, 0.0),
-        joint_pos={
-            r"main_steer_.*": 0.0,  # 所有主动轮舵向
-            r"main_wheel_.*": 0.0,  # 所有主动轮轮速
-            r"up_arm_.*": 0.0,      # 所有上臂关节(机身与大臂连接点)
-            r"mid_arm_.*": 0.8,     # 所有中臂关节(大臂与小臂连接点)
-            r"tail_arm_.*": 0.0,    # 所有尾臂关节(小臂与末端辅助轮连接点)
-            r"assist_steer_.*": 0.0, # 所有辅助轮舵向
-            r"assist_wheel_.*": 0.0, # 所有辅助轮轮速
-            r"bend_.*": 0.0,         # 所有弯折变形关节
-        },
-        joint_vel={
-            r".*": 0.0,
-        }
-    ),
-    actuators={
-        "steer": ImplicitActuatorCfg(
-            joint_names_expr=["main_steer_.*", "assist_steer_.*"],
-            effort_limit_sim={
-                "main_steer_.*":    100.0,
-                "assist_steer_.*":  100.0,
-            },
-            velocity_limit_sim=     2.0,
-            stiffness=              5.0,
-            damping=                0.5,
-            # effort_limit_sim=.0,
-        ),
-        "wheel": ImplicitActuatorCfg( # 轮子: 适合速度控制 (Stiffness=0)
-            joint_names_expr=["main_wheel_.*","assist_wheel_.*"],
-            effort_limit_sim={
-                "main_wheel_.*":    20.0,
-                "assist_wheel_.*":  20.0,
-            },
-            velocity_limit_sim=     20.0,
-            stiffness=              0.0,
-            damping=                1.0,
-            # effort_limit_sim=50.0,
-        ),
-        "arms": ImplicitActuatorCfg(
-            joint_names_expr=["up_arm_.*","mid_arm_.*","tail_arm_.*"],
-            effort_limit_sim={
-                "up_arm_.*":    100.0,
-                "mid_arm_.*":   200.0,
-                "tail_arm_.*":  100.0,
-            },
-            velocity_limit_sim= {
-                "up_arm_.*":    1.0,
-                "mid_arm_.*":   1.0,
-                "tail_arm_.*":  1.0,
-            },
-            stiffness=          500.0,
-            damping=            5.0,
-        ),
-        "bend": ImplicitActuatorCfg(
-            joint_names_expr=["bend_.*"],
-            effort_limit_sim=   200.0,
-            velocity_limit_sim= 1.0,
-            stiffness=          500.0,
-            damping=            10.0,
-        )
-    }
-)
-
-
-# =============================================================================
-# 2. 场景配置 (Scene Configuration)
-# =============================================================================
-@configclass
-class PipeRobotSceneCfg(InteractiveSceneCfg):
-    # 地面
-    ground = AssetBaseCfg(
-        prim_path="/World/defaultGroundPlane", 
-        spawn=sim_utils.GroundPlaneCfg()
-    )
-    # 光照
-    light = AssetBaseCfg(
-        prim_path="/World/lightDistant", 
-        spawn=sim_utils.DistantLightCfg(intensity=5000.0)
-    )
-    # 管道障碍物 (静态)
-    pipe_obstacle = AssetBaseCfg(
-        prim_path="/World/PipeObstacle",
-        spawn=sim_utils.CylinderCfg(
-            radius=0.18,        # 直径 360mm
-            height=2.0,         # 长度 2m
-            rigid_props=None,   # 静态 (Static)
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-        ),
-        init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.0, 0.0, 0.5), # 中心位置
-            rot=(0.70711, 0.70711, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
-        ),
-    )
-    # 机器人 (必须使用 {ENV_REGEX_NS} 占位符)
-    robot: ArticulationCfg = PIPE_ROBOT_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-
-
-# =============================================================================
-# 3. 动作配置 (Actions Configuration)
-# =============================================================================
-@configclass
-class ActionsCfg:
-    # 1. 轮速控制 (Velocity Control)
-    # 注意：使用 Cfg 后缀的配置类
-    wheels = mdp.JointVelocityActionCfg(
-        asset_name="robot",
-        joint_names=[".*wheel_.*"], 
-        scale=1.0,
-    )
-
-    # 2. 机械臂位置控制 (Position Control)
-    arms = mdp.JointPositionActionCfg(
-        asset_name="robot",
-        joint_names=[".*arm_.*", "bend_.*"],
-        scale=1.0,
-        use_default_offset=True,
-    )
-    
-    # 3. 舵向位置控制 (Position Control)
-    steer = mdp.JointPositionActionCfg(
-        asset_name="robot",
-        joint_names=[".*steer_.*"],
-        scale=1.0,
-        use_default_offset=True,
-    )
-
-
-# =============================================================================
-# 4. 观测配置 (Observations Configuration)
-# =============================================================================
-@configclass
-class ObservationsCfg:
-    @configclass
-    class PolicyCfg(ObsGroup):
-        # 简单观测：关节位置和速度
-        joint_pos = ObsTerm(func=mdp.joint_pos_rel)
-        joint_vel = ObsTerm(func=mdp.joint_vel_rel)
-        
-    policy = PolicyCfg()
-
-
-# =============================================================================
-# 5. 事件配置 (Events Configuration)
-# =============================================================================
-@configclass
-class EventCfg:
-    # Reset 时重置关节位置到默认附近 (微小随机)
-    reset_joints = EventTerm(
-        func=mdp.reset_joints_by_scale,
-        mode="reset",
-        params={
-            "position_range": (1.0, 1.0),
-            "velocity_range": (0.0, 0.0),
-        },
-    )
-
-
-# =============================================================================
-# 6. 其他 RL 必需配置 (Rewards, Terminations)
-# =============================================================================
-@configclass
-class RewardsCfg:
-    """空奖励配置 (Demo用途)"""
-    pass
-
-@configclass
-class TerminationsCfg:
-    """空终止配置 (Demo用途: 不自动重置)"""
-    pass
-
-
-# =============================================================================
-# 7. 环境总配置 (Environment Configuration)
-# =============================================================================
-@configclass
-class PipeRobotEnvCfg(ManagerBasedRLEnvCfg):
-    # 场景
-    scene: PipeRobotSceneCfg = PipeRobotSceneCfg(num_envs=1, env_spacing=2.0)
-    # 观测
-    observations: ObservationsCfg = ObservationsCfg()
-    # 动作
-    actions: ActionsCfg = ActionsCfg()
-    # 事件
-    events: EventCfg = EventCfg()
-    # 奖励 (RL必须)
-    rewards: RewardsCfg = RewardsCfg()
-    # 终止条件 (RL必须)
-    terminations: TerminationsCfg = TerminationsCfg()
-    # 回合长度 (RL必须)
-    episode_length_s: float = 1000.0
-    
-    # 仿真参数
-    sim: sim_utils.SimulationCfg = sim_utils.SimulationCfg(
-        dt=0.01, # 物理步长 10ms
-        render_interval=1, # 每步都渲染，保证流畅交互
-    )
-    decimation = 1 # 决策频率 = 物理频率
-
-
-# =============================================================================
-# 8. 主程序与键盘交互 (Main & Demo Class)
-# =============================================================================
 class PiprRobotDemo:
     def __init__(self, env: ManagerBasedRLEnv):
         self.env = env
-        # 获取输入接口
         self.input = carb.input.acquire_input_interface()
-        # 修改：通过 omni.appwindow 获取键盘
         self.keyboard = omni.appwindow.get_default_app_window().get_keyboard()
-        # 订阅键盘事件
-        self.sub_keyboard = self.input.subscribe_to_keyboard_events(
+        
+        # 1. 订阅键盘事件
+        self.sub_kwd = self.input.subscribe_to_keyboard_events(
             self.keyboard, self._on_keyboard_event
         )
+        # 2. 订阅通用事件 (用于手柄)
+        self.sub_pad = self.input.subscribe_to_input_events(
+            self._on_gamepad_event,
+            0xFFFFFFFF, 
+            None,       
+            0           
+        )
+
+        # --- 控制指令状态 (Command States) ---
+        # 基础速度 [Vx, Vy]
+        self.cmd_vel = [0.0, 0.0] 
+        # 最大线速度 m/s
+        self.max_speed = 0.5 
         
-        # 控制命令状态
-        self.wheel_vel_cmd = 0.0  # 轮子目标速度 (rad/s)
-        self.arm_pos_cmd = 0.0    # 臂位置偏移 (rad)
-        
-        # Action Manager 的 active_terms 是一个包含名称的列表 (List of strings)
+        # 摇杆状态跟踪 (处理独立轴事件)
+        self.stick_val = {
+            "UP": 0.0, "DOWN": 0.0,
+            "LEFT": 0.0, "RIGHT": 0.0
+        }
+
+        # 关节位置状态 (弧度)
+        self.cmd_pos = {
+            "pipe_dia_01": 0.8, # 后小臂 (Mid)
+            "pipe_dia_02": 0.8, # 前小臂 (Mid)
+            "up_arms_01":  0.0, # 后大臂 (Up)
+            "up_arms_02":  0.0, # 前大臂 (Up)
+            "bend_01":     0.0, # 后弯折
+            "bend_02":     0.0, # 前弯折
+        }
+
+        # 步进角度 (弧度)
+        self.step_small = math.radians(3.0)
+        self.step_large = math.radians(5.0)
+
+        # 打印信息
         self.term_names = self.env.action_manager.active_terms
         print(f"[INFO] Action Terms: {self.term_names}")
+        print("[INFO] Gamepad & Keyboard Control Ready.")
+
+    def _on_gamepad_event(self, event: carb.input.InputEvent, *args, **kwargs):
+        """手柄事件处理"""
+        if event.deviceType != carb.input.DeviceType.GAMEPAD:
+            return True
+        
+        gp_event = event.event
+        try:
+            val = gp_event.value
+            input_id = gp_event.input
+            # 获取简洁的名称 (e.g. "LEFT_STICK_UP", "A", "DPAD_UP")
+            name = str(input_id).replace("GamepadInput.", "")
+            
+            # -------------------------------------------------
+            # 1. 摇杆控制底盘移动 (Left Stick)
+            # -------------------------------------------------
+            # 某些手柄/驱动将摇杆映射为独立的四个方向轴 (0.0 ~ 1.0)
+            # 我们需要维护状态来合成 Velocity
+            
+            # 更新轴状态
+            if name in ["LEFT_STICK_UP", "LEFT_STICK_DOWN", "LEFT_STICK_LEFT", "LEFT_STICK_RIGHT"]:
+                # 简单的死区过滤
+                stick_v = val if abs(val) > 0.1 else 0.0
+                
+                if name == "LEFT_STICK_UP":    self.stick_val["UP"] = stick_v
+                if name == "LEFT_STICK_DOWN":  self.stick_val["DOWN"] = stick_v
+                if name == "LEFT_STICK_LEFT":  self.stick_val["LEFT"] = stick_v
+                if name == "LEFT_STICK_RIGHT": self.stick_val["RIGHT"] = stick_v
+                
+                # 合成速度
+                # X轴 (前后): UP(+) / DOWN(-) -> 机器人 X+ 是前进
+                # 如果 UP 对应摇杆推上去，且值为 1.0，则 Vel X = 1.0 * max
+                self.cmd_vel[0] = (self.stick_val["UP"] - self.stick_val["DOWN"]) * self.max_speed
+                 
+                # Y轴 (左右): LEFT(+) / RIGHT(-) -> 机器人 Y+ 是左移
+                self.cmd_vel[1] = (self.stick_val["LEFT"] - self.stick_val["RIGHT"]) * self.max_speed
+
+            # 兼容标准 X/Y 轴映射 (如果驱动支持)
+            elif name == "LEFT_STICK_Y":
+                 if abs(val) > 0.1: self.cmd_vel[0] = -val * self.max_speed
+                 else: self.cmd_vel[0] = 0.0
+            elif name == "LEFT_STICK_X":
+                 if abs(val) > 0.1: self.cmd_vel[1] = -val * self.max_speed
+                 else: self.cmd_vel[1] = 0.0
+
+            # -------------------------------------------------
+            # 2. 按钮触发离散动作
+            # -------------------------------------------------
+            is_pressed = val > 0.5
+            if not is_pressed:
+                return True
+
+            # --- 2. 后侧小臂 (XY / UI) -> 对应手柄 X/Y ---
+            # X: 缩小
+            if name == "X":
+                self.cmd_pos["pipe_dia_01"] -= self.step_large
+            # Y: 变大
+            elif name == "Y":
+                self.cmd_pos["pipe_dia_01"] += self.step_large
+
+            # --- 3. 前侧小臂 (AB / JK) -> 对应手柄 A/B ---
+            # A: 缩小
+            elif name == "A":
+                self.cmd_pos["pipe_dia_02"] -= self.step_large
+            # B: 变大
+            elif name == "B":
+                self.cmd_pos["pipe_dia_02"] += self.step_large
+
+            # --- 4. 后侧大臂 (DPAD U/D) ---
+            elif name == "DPAD_UP":
+                self.cmd_pos["up_arms_01"] += self.step_small
+            elif name == "DPAD_DOWN":
+                self.cmd_pos["up_arms_01"] -= self.step_small
+
+            # --- 5. 前侧大臂 (DPAD L/R) ---
+            elif name == "DPAD_RIGHT":
+                self.cmd_pos["up_arms_02"] += self.step_small
+            elif name == "DPAD_LEFT":
+                self.cmd_pos["up_arms_02"] -= self.step_small
+
+            # --- 6. 后侧弯折 (LB/LT) ---
+            elif name == "LEFT_SHOULDER": # LB
+                self.cmd_pos["bend_01"] -= self.step_small
+            elif name == "LEFT_TRIGGER":  # LT
+                self.cmd_pos["bend_01"] += self.step_small
+
+            # --- 7. 前侧弯折 (RB/RT) ---
+            elif name == "RIGHT_SHOULDER": # RB
+                self.cmd_pos["bend_02"] -= self.step_small
+            elif name == "RIGHT_TRIGGER":  # RT
+                self.cmd_pos["bend_02"] += self.step_small
+
+        except Exception:
+            pass
+        return True
 
     def _on_keyboard_event(self, event, *args, **kwargs):
-        """处理键盘回调"""
-        # 注意: 这里的 print 可能在终端被刷屏掩盖
+        """键盘事件处理"""
         if event.type == carb.input.KeyboardEventType.KEY_PRESS:
-            # W: 前进
+            # 1. 移动 (WASD Full Speed)
             if event.input == carb.input.KeyboardInput.W:
-                self.wheel_vel_cmd = 5.0 
-                print("[CMD] Move Forward")
-            # S: 后退
+                self.cmd_vel[0] = self.max_speed
             elif event.input == carb.input.KeyboardInput.S:
-                self.wheel_vel_cmd = -5.0
-                print("[CMD] Move Backward")
-            # U: 大臂下压 (-5度) - 假设负号是下压
-            elif event.input == carb.input.KeyboardInput.U:
-                self.arm_pos_cmd -= math.radians(5.0) 
-                print(f"[CMD] Arm Down: {math.degrees(self.arm_pos_cmd):.1f} deg")
-            # I: 大臂抬起 (+5度)
-            elif event.input == carb.input.KeyboardInput.I:
-                self.arm_pos_cmd += math.radians(5.0) 
-                print(f"[CMD] Arm Up: {math.degrees(self.arm_pos_cmd):.1f} deg")
-                
-        elif event.type == carb.input.KeyboardEventType.KEY_RELEASE:
-            # 松开 W/S: 停止轮子
-            if event.input == carb.input.KeyboardInput.W or event.input == carb.input.KeyboardInput.S:
-                self.wheel_vel_cmd = 0.0
+                self.cmd_vel[0] = -self.max_speed
+            elif event.input == carb.input.KeyboardInput.A:
+                self.cmd_vel[1] = self.max_speed
+            elif event.input == carb.input.KeyboardInput.D:
+                self.cmd_vel[1] = -self.max_speed
 
+            # 2. 后侧小臂 (U/I)
+            elif event.input == carb.input.KeyboardInput.U:
+                self.cmd_pos["pipe_dia_01"] -= self.step_large
+            elif event.input == carb.input.KeyboardInput.I:
+                self.cmd_pos["pipe_dia_01"] += self.step_large
+            
+            # 3. 前侧小臂 (J/K)
+            elif event.input == carb.input.KeyboardInput.J:
+                self.cmd_pos["pipe_dia_02"] -= self.step_large
+            elif event.input == carb.input.KeyboardInput.K:
+                self.cmd_pos["pipe_dia_02"] += self.step_large
+
+            # 4. 后侧大臂 (UP/DOWN)
+            elif event.input == carb.input.KeyboardInput.UP:
+                self.cmd_pos["up_arms_01"] += self.step_small
+            elif event.input == carb.input.KeyboardInput.DOWN:
+                self.cmd_pos["up_arms_01"] -= self.step_small
+
+            # 5. 前侧大臂 (LEFT/RIGHT)
+            elif event.input == carb.input.KeyboardInput.RIGHT:
+                self.cmd_pos["up_arms_02"] += self.step_small
+            elif event.input == carb.input.KeyboardInput.LEFT:
+                self.cmd_pos["up_arms_02"] -= self.step_small
+
+            # 6. 后侧弯折 (T/Y)
+            elif event.input == carb.input.KeyboardInput.T:
+                self.cmd_pos["bend_01"] -= self.step_small
+            elif event.input == carb.input.KeyboardInput.Y:
+                self.cmd_pos["bend_01"] += self.step_small
+            
+            # 7. 前侧弯折 (G/H)
+            elif event.input == carb.input.KeyboardInput.G:
+                self.cmd_pos["bend_02"] -= self.step_small
+            elif event.input == carb.input.KeyboardInput.H:
+                self.cmd_pos["bend_02"] += self.step_small
+
+        elif event.type == carb.input.KeyboardEventType.KEY_RELEASE:
+            # 停止移动
+            if event.input in [carb.input.KeyboardInput.W, carb.input.KeyboardInput.S]:
+                self.cmd_vel[0] = 0.0
+            if event.input in [carb.input.KeyboardInput.A, carb.input.KeyboardInput.D]:
+                self.cmd_vel[1] = 0.0
+        
         return True
 
     def run(self):
         """运行主循环"""
         obs, _ = self.env.reset()
-        
-        # 获取 Action Manager 以便了解动作顺序
         action_mgr = self.env.action_manager
-        # 注意：这里的顺序必须与 action tensor 的拼接顺序一致
-        # active_terms 是个字典，在 Python 3.7+ 中字典保持插入顺序
-        # ActionsCfg 中的定义顺序决定了 tensor 的切片顺序
         
-        print("\n" + "="*40)
-        print("Pipe Robot Interactive Demo")
-        print("Controls:")
-        print("  [W] Drive Forward")
-        print("  [S] Drive Backward")
-        print("  [U] Arm Down (-5 deg)")
-        print("  [I] Arm Up   (+5 deg)")
-        print("="*40 + "\n")
+        print("\n" + "="*50)
+        print("Pipe Robot Advanced Control Demo")
+        print(" Controls Reference:")
+        print("  Base Move : L-Stick / WASD")
+        print("  Rear Pipe : X/Y     / U/I (Dia)")
+        print("  Front Pipe: A/B     / J/K (Dia)")
+        print("  Rear Arm  : D-U/D   / Up/Down")
+        print("  Front Arm : D-L/R   / Left/Right")
+        print("  Rear Bend : LB/LT   / T/Y")
+        print("  Front Bend: RB/RT   / G/H")
+        print("="*50 + "\n")
         
+        count = 0
         while simulation_app.is_running():
-            # 1. 动态构建 Action Tensor
-            # 我们需要把 wheel cmd 和 arm cmd 填入正确的位置
-            
             actions_list = []
             
+            # --- Debug: Print cmd_vel periodically to ensure input is received ---
+            count += 1
+            if count % 100 == 0:
+                # 打印当前速度指令，确保输入正确
+                if abs(self.cmd_vel[0]) > 0.01 or abs(self.cmd_vel[1]) > 0.01:
+                    print(f"[INFO] Command Velocity: Vx={self.cmd_vel[0]:.3f}, Vy={self.cmd_vel[1]:.3f}")
+
             for term_name in self.term_names:
-                # 使用 get_term 方法获取 term 对象
                 term = action_mgr.get_term(term_name)
                 dim = term.action_dim 
-                
-                # 创建空白动作
                 term_action = torch.zeros((self.env.num_envs, dim), device=self.env.device)
                 
-                if term_name == "wheels":
-                    term_action[:] = self.wheel_vel_cmd
-                elif term_name == "arms":
-                    # 所有臂关节统一应用偏移
-                    term_action[:] = self.arm_pos_cmd
-                elif term_name == "steer":
-                    # 保持 0
-                    pass
+                # --- 映射逻辑 ---
+                if term_name.startswith("steer_wheel"):
+                    # 舵轮模块：输入 [Vx, Vy]
+                    term_action[:, 0] = self.cmd_vel[0]
+                    term_action[:, 1] = self.cmd_vel[1]
                 
+                elif term_name in self.cmd_pos:
+                    # 位置控制模块：直接查字典
+                    term_action[:] = self.cmd_pos[term_name]
+                
+                else:
+                    # 其他未知项 (如 coupled_arms 被拆了?)
+                    # 注意: 我们代码里注册的是 pipe_dia_01, 而不是 coupled_arms
+                    pass
+
                 actions_list.append(term_action)
             
-            # 2. 拼接完整动作
+            # 执行
             full_action = torch.cat(actions_list, dim=1)
+            obs, _, terminated, truncated, _ = self.env.step(full_action)
             
-            # 3. 步进环境
-            obs, rew, terminated, truncated, info = self.env.step(full_action)
-            
-            # 4. 自动复位 (虽然 Demo 一般不复位，但这防备跑丢)
             if terminated.any() or truncated.any():
                 obs, _ = self.env.reset()
+
 
 
 def main():
