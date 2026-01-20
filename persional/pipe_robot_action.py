@@ -50,8 +50,6 @@ class LinkedArmAction(mdp.JointPositionAction):
         # mid_arm索引存储在 self._joint_ids (基类处理)
         print(f"[INFO] LinkedArmAction: {len(self._joint_ids)} mid_arms -> {len(self.tail_joint_idxs)} tail_arms")
 
-        # --- Debug: 打印关节名称配对以进行验证 ---
-        # 获取实际的关节名称
         # 注意: 如果 _joint_ids 是 tensor，需先转为 list
         mid_ids_list = self._joint_ids.tolist() if isinstance(self._joint_ids, torch.Tensor) else self._joint_ids
         tail_ids_list = self.tail_joint_idxs.tolist() if isinstance(self.tail_joint_idxs, torch.Tensor) else self.tail_joint_idxs
@@ -109,7 +107,6 @@ class SteerWheelActionCfg(mdp.JointVelocityActionCfg):
     def __post_init__(self):
         self.class_type = SteerWheelAction
         super().__post_init__()
-    
 class SteerWheelAction(mdp.JointVelocityAction):
     cfg: SteerWheelActionCfg
     def __init__(self , cfg: SteerWheelActionCfg, env: ManagerBasedRLEnv):
@@ -121,10 +118,7 @@ class SteerWheelAction(mdp.JointVelocityAction):
         for pattern in cfg.steer_joint_names:
             ids, _ = asset.find_joints(pattern)
             steer_joint_names.extend(ids)
-
         # 3. 存储索引
-        # self._joint_ids 存储的是 Wheel 的索引 (基类管理)
-        # self.steer_joint_idxs 存储的是 Steer 的索引
         self.steer_joint_idxs = torch.tensor(steer_joint_names, device=env.device, dtype=torch.int32)
         
         # --- Debug Info ---
@@ -153,48 +147,84 @@ class SteerWheelAction(mdp.JointVelocityAction):
         steer_names = [asset.joint_names[i] for i in steer_ids]
         
         if len(wheel_names) > 0 and len(steer_names) > 0:
-             print(f"[INFO] SteerWheelAction Unit: {wheel_names[0]} <--> {steer_names[0]}")
+            print(f"[INFO] SteerWheelAction Unit: {wheel_names[0]} <--> {steer_names[0]}")
 
     @property
     def action_dim(self):
-        # 覆盖动作维度：虽然控制 N 个轮子，但输入只有 2 维 (Vx, Vy)
-        # 这个动作将广播给通过 regex 匹配到的所有轮子
         return 2
     def process_actions(self, actions: torch.Tensor) -> torch.Tensor:
-        # process_actions 通常用于处理 clip 或 scale
-        # 这里的 actions 输入就是 (Env_Num, 2) 的 [Vx, Vy]
-        # 我们暂时只做简单的缩放，实际解算在 apply_actions 中进行
-        return actions * self.cfg.scale
+        self._processed_actions = actions * self.cfg.scale
+        return self._processed_actions
     def apply_actions(self):
         # Input: [Vx, Vy] -> (Num_Envs, 2)
         cmds = self.processed_actions
         vx = cmds[:, 0]
         vy = cmds[:, 1]
         
-        # 1. 运动解算 (Swerve Kinematics)
-        # 轮速 V = sqrt(vx^2 + vy^2)
-        target_speed = torch.hypot(vx, vy).unsqueeze(1) # (Num_Envs, 1)
+        # --- Configs & Thresholds ---
+        # 最小输入阈值 (Input Deadzone)
+        CMD_THRESHOLD = 0.01
+        # 等待舵轮转动到位的阈值 (Wait-for-Align), 0.2 rad ≈ 11.5度
+        WAIT_ANGLE_THRESHOLD = 0.2 
+        # 舵机机械限位 (Joint Limit), URDF defined [-1.8, 1.8]
+        JOINT_LIMIT = 1.8
         
-        # 2. 舵角计算
-        # 只有当速度大于阈值时，才更新目标角度
-        # (Isaac Sim中保持上次Command即保持位置)
-        # 但如果是 position control，我们需要明确的值。
-        # 简单方案：总是计算，0速度时归零。复杂方案：保留上一帧。
-        # 这里为了防止“松手归零”，我们如果速度极小，就不改变Steer的目标
-        # 但是 Action 必须是一个 Tensor。
+        # 1. 基础 Swerve 解算 (Basic Kinematics)
+        # 目标线速度 V
+        cmd_speed = torch.hypot(vx, vy).unsqueeze(1) # (Num_Envs, 1)
+        # 理想目标角度 (相对于 +Y 轴)
+        # atan2(y, x) 是相对于 +X 的角度. 当 vx=0, vy=1 (向前)时, atan2=pi/2.
+        # 此时我们需要 0 度. 所以 -pi/2.
+        ideal_angle = torch.atan2(vy, vx).unsqueeze(1) - 0.5 * math.pi
+        # Normalize to [-pi, pi]
+        ideal_angle = (ideal_angle + math.pi) % (2 * math.pi) - math.pi
         
-        # 当前策略：正常计算，不特殊处理（先排除故障，再谈优化）
-        target_angle = torch.atan2(vy, vx).unsqueeze(1) # (Num_Envs, 1)
+        # 2. 机械限位与反转逻辑 (Limit & Reverse Logic)
+        # 由于舵机只能转 +/- 1.8 rad (约103度), 也就是只能覆盖前方的扇区.
+        # 如果目标在后方, 我们必须"反向驱动": 舵机转到反方向, 电机反转.
         
-        # 3. 下发指令 (注意：只下发给单一关节)
-        # 保护：防止空索引导致错误 (虽然上面init检查了，但为了健壮性)
-        if len(self._joint_ids) > 0:
-            self._asset.set_joint_velocity_target(target_speed, joint_ids=self._joint_ids)
-        if len(self.steer_joint_idxs) > 0:
-            # TODO: 如果需要保持角度，可在此处加入逻辑
-            self._asset.set_joint_position_target(target_angle, joint_ids=self.steer_joint_idxs)
-
-
+        # 方案 A: 正向驱动 (Forward) -> 目标为 ideal_angle
+        # 方案 B: 反向驱动 (Reverse) -> 目标为 ideal_angle + pi
+        
+        flip_angle = (ideal_angle + math.pi + math.pi) % (2 * math.pi) - math.pi
+        
+        # 检查物理可行性 (Is physically reachable?)
+        valid_A = torch.abs(ideal_angle) <= JOINT_LIMIT
+        valid_B = torch.abs(flip_angle) <= JOINT_LIMIT
+        
+        # 3. 现在的状态 (Current State)
+        current_pos = self._asset.data.joint_pos[:, self.steer_joint_idxs]
+        
+        # 计算移动代价 (Distance to target)
+        dist_A = torch.abs(ideal_angle - current_pos)
+        dist_B = torch.abs(flip_angle - current_pos)
+        
+        # 选择逻辑:
+        # 1. 如果 B 可行, 且 (A 不可行 或 B 更近), 则选 B
+        # 2. 否则选 A (假设 A 可行, 或者都不可行时随便选一个)
+        # 注: [-1.8, 1.8] 范围 > 180度, 理论上 A/B 必有一个可行.
+        use_B = valid_B & (~valid_A | (dist_B < dist_A))
+        
+        target_angle = torch.where(use_B, flip_angle, ideal_angle)
+        target_speed = torch.where(use_B, -cmd_speed, cmd_speed)
+        
+        # 4. 等待对齐逻辑 (Wait-for-Align)
+        # 如果当前角度误差过大, 此时强行转动轮子会导致打滑/跳动/摩擦对抗
+        # 策略: 误差大时, 轮速置零
+        err = torch.abs(target_angle - current_pos)
+        final_speed = torch.where(err > WAIT_ANGLE_THRESHOLD, torch.zeros_like(target_speed), target_speed)
+        
+        # 5. 静止保持逻辑 (Standstill Handling)
+        # 如果输入非常小(摇杆回中), 不应该乱转舵机, 应该保持当前位置或锁定
+        active_mask = cmd_speed > CMD_THRESHOLD
+        
+        # 如果 active: 使用计算出的 target_angle
+        # 如果 inactive: 使用 current_pos (锁定当前位置) 防止回中时归零
+        final_angle_cmd = torch.where(active_mask, target_angle, current_pos)
+        
+        # 6. 下发指令
+        self._asset.set_joint_velocity_target(final_speed, joint_ids=self._joint_ids)
+        self._asset.set_joint_position_target(final_angle_cmd, joint_ids=self.steer_joint_idxs)
 # =============================================================================
 # 3. 动作配置 (Actions Configuration)
 # =============================================================================

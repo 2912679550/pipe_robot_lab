@@ -67,8 +67,8 @@ PIPE_ROBOT_CFG = ArticulationCfg(
         "wheel": ImplicitActuatorCfg( # 轮子: 适合速度控制 (Stiffness=0)
             joint_names_expr=[".*main_wheel_.*",".*assist_wheel_.*"],
             effort_limit_sim={
-                ".*main_wheel_.*":    20.0,
-                ".*assist_wheel_.*":  20.0,
+                ".*main_wheel_.*":    50.0,
+                ".*assist_wheel_.*":  50.0,
             },
             velocity_limit_sim=     20.0,
             stiffness=              0.0,
@@ -78,9 +78,9 @@ PIPE_ROBOT_CFG = ArticulationCfg(
         "arms": ImplicitActuatorCfg(
             joint_names_expr=[".*up_arm_.*",".*mid_arm_.*",".*tail_arm_.*"],
             effort_limit_sim={
-                ".*up_arm_.*":    500.0,
-                ".*mid_arm_.*":   500.0,
-                ".*tail_arm_.*":  500.0,
+                ".*up_arm_.*":    2000.0,
+                ".*mid_arm_.*":   2000.0,
+                ".*tail_arm_.*":  2000.0,
             },
             velocity_limit_sim= {
                 ".*up_arm_.*":    1.0,
@@ -124,6 +124,12 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
             height=2.0,         # 长度 2m
             rigid_props=None,   # 静态 (Static)
             collision_props=sim_utils.CollisionPropertiesCfg(),
+            # 配置高摩擦力材质
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=2.0,   # 静摩擦系数
+                dynamic_friction=2.0,  # 动摩擦系数
+                restitution=0.0,       # 恢复系数(0表示不反弹)
+            ),
         ),
         init_state=AssetBaseCfg.InitialStateCfg(
             pos=(0.0, 0.0, 0.5), # 中心位置
