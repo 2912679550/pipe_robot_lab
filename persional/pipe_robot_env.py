@@ -27,12 +27,12 @@ PIPE_ROBOT_CFG = ArticulationCfg(
             angular_damping=0.0,
             max_linear_velocity=1000.0,
             max_angular_velocity=1000.0,
-            max_depenetration_velocity=1.0,
+            max_depenetration_velocity=1000.0,
         ),
         articulation_props=sim_utils.ArticulationRootPropertiesCfg(
             enabled_self_collisions=False,
-            solver_position_iteration_count=4,
-            solver_velocity_iteration_count=4,
+            solver_position_iteration_count=16,
+            solver_velocity_iteration_count=16,
         ),
     ),
     init_state=ArticulationCfg.InitialStateCfg(
@@ -59,20 +59,20 @@ PIPE_ROBOT_CFG = ArticulationCfg(
                 ".*main_steer_.*":    100.0,
                 ".*assist_steer_.*":  100.0,
             },
-            velocity_limit_sim=     2.0,
-            stiffness=              50000.0, # 提高刚度确保位置准确
-            damping=                500.0,
+            velocity_limit_sim=     5.0,
+            stiffness=              5000.0, # 提高刚度确保位置准确
+            damping=                100.0,
             # effort_limit_sim=.0,
         ),
         "wheel": ImplicitActuatorCfg( # 轮子: 适合速度控制 (Stiffness=0)
             joint_names_expr=[".*main_wheel_.*",".*assist_wheel_.*"],
             effort_limit_sim={
-                ".*main_wheel_.*":    50.0,
-                ".*assist_wheel_.*":  50.0,
+                ".*main_wheel_.*":    100.0,
+                ".*assist_wheel_.*":  100.0,
             },
             velocity_limit_sim=     20.0,
             stiffness=              0.0,
-            damping=                2.0,
+            damping=                10.0,
             # effort_limit_sim=50.0,
         ),
         "arms": ImplicitActuatorCfg(
@@ -80,21 +80,21 @@ PIPE_ROBOT_CFG = ArticulationCfg(
             effort_limit_sim={
                 ".*up_arm_.*":    2000.0,
                 ".*mid_arm_.*":   2000.0,
-                ".*tail_arm_.*":  2000.0,
+                ".*tail_arm_.*":  5000.0,
             },
             velocity_limit_sim= {
-                ".*up_arm_.*":    1.0,
-                ".*mid_arm_.*":   1.0,
-                ".*tail_arm_.*":  1.0,
+                ".*up_arm_.*":    10.0,
+                ".*mid_arm_.*":   10.0,
+                ".*tail_arm_.*":  20.0,
             },
-            stiffness=          10000.0,
+            stiffness=          5000.0,
             damping=            100.0,
         ),
         "bend": ImplicitActuatorCfg(
             joint_names_expr=[".*bend_.*"],
             effort_limit_sim=   500.0,
-            velocity_limit_sim= 1.0,
-            stiffness=          10000.0,
+            velocity_limit_sim= 10.0,
+            stiffness=          1000.0,
             damping=            100.0,
         )
     }

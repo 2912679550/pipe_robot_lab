@@ -42,7 +42,7 @@ class PiprRobotDemo:
         # 基础速度 [Vx, Vy]
         self.cmd_vel = [0.0, 0.0] 
         # 最大线速度 m/s
-        self.max_speed = 0.2 
+        self.max_speed = 0.4 
         # 摇杆状态跟踪 (处理独立轴事件)
         self.stick_val = {
             "UP": 0.0, "DOWN": 0.0,
@@ -57,6 +57,14 @@ class PiprRobotDemo:
             "bend_01":     0.0, # 后弯折
             "bend_02":     0.0, # 前弯折
         }
+        self.cmd_pos_limits = {
+            "pipe_dia_01": (-0.488692, 1.274090),
+            "pipe_dia_02": (-0.488692, 1.274090),
+            "up_arms_01":  (-0.6, 0.5),
+            "up_arms_02":  (-0.6, 0.5),
+            "bend_01":     (-0.488692, 1.047197533),
+            "bend_02":     (-0.488692, 1.047197533),
+        }
         # 步进角度 (弧度)
         self.step_small = math.radians(3.0)
         self.step_large = math.radians(5.0)
@@ -68,6 +76,12 @@ class PiprRobotDemo:
         self.term_names = self.env.action_manager.active_terms
         print(f"[INFO] Action Terms: {self.term_names}")
         print("[INFO] Gamepad & Keyboard Control Ready.")
+
+    def _update_cmd_pos(self, key, delta):
+        """辅助函数：更新关节位置并进行限位限制"""
+        if key in self.cmd_pos and key in self.cmd_pos_limits:
+            low, high = self.cmd_pos_limits[key]
+            self.cmd_pos[key] = max(low, min(high, self.cmd_pos[key] + delta))
 
     def _on_gamepad_event(self, event: carb.input.InputEvent, *args, **kwargs):
         """手柄事件处理"""
@@ -107,37 +121,37 @@ class PiprRobotDemo:
             # --- 2. 后侧小臂 (XY / UI) -> 对应手柄 X/Y ---
             # X: 缩小
             if name == "X":
-                self.cmd_pos["pipe_dia_01"] -= self.step_large
+                self._update_cmd_pos("pipe_dia_01", -self.step_large)
             # Y: 变大
             elif name == "Y":
-                self.cmd_pos["pipe_dia_01"] += self.step_large
+                self._update_cmd_pos("pipe_dia_01", self.step_large)
             # --- 3. 前侧小臂 (AB / JK) -> 对应手柄 A/B ---
             # A: 缩小
             elif name == "A":
-                self.cmd_pos["pipe_dia_02"] -= self.step_large
+                self._update_cmd_pos("pipe_dia_02", -self.step_large)
             # B: 变大
             elif name == "B":
-                self.cmd_pos["pipe_dia_02"] += self.step_large
+                self._update_cmd_pos("pipe_dia_02", self.step_large)
             # --- 4. 后侧大臂 (DPAD U/D) ---
             elif name == "DPAD_UP":
-                self.cmd_pos["up_arms_01"] += self.step_small
+                self._update_cmd_pos("up_arms_01", self.step_small)
             elif name == "DPAD_DOWN":
-                self.cmd_pos["up_arms_01"] -= self.step_small
+                self._update_cmd_pos("up_arms_01", -self.step_small)
             # --- 5. 前侧大臂 (DPAD L/R) ---
             elif name == "DPAD_RIGHT":
-                self.cmd_pos["up_arms_02"] += self.step_small
+                self._update_cmd_pos("up_arms_02", self.step_small)
             elif name == "DPAD_LEFT":
-                self.cmd_pos["up_arms_02"] -= self.step_small
+                self._update_cmd_pos("up_arms_02", -self.step_small)
             # --- 6. 后侧弯折 (LB/LT) ---
             elif name == "LEFT_SHOULDER": # LB
-                self.cmd_pos["bend_01"] -= self.step_small
+                self._update_cmd_pos("bend_01", -self.step_small)
             elif name == "LEFT_TRIGGER":  # LT
-                self.cmd_pos["bend_01"] += self.step_small
+                self._update_cmd_pos("bend_01", self.step_small)
             # --- 7. 前侧弯折 (RB/RT) ---
             elif name == "RIGHT_SHOULDER": # RB
-                self.cmd_pos["bend_02"] -= self.step_small
+                self._update_cmd_pos("bend_02", -self.step_small)
             elif name == "RIGHT_TRIGGER":  # RT
-                self.cmd_pos["bend_02"] += self.step_small
+                self._update_cmd_pos("bend_02", self.step_small)
         except Exception:
             pass
         return True
@@ -161,39 +175,39 @@ class PiprRobotDemo:
 
             # 2. 后侧小臂 (U/I)
             elif event.input == carb.input.KeyboardInput.U:
-                self.cmd_pos["pipe_dia_01"] -= self.step_large
+                self._update_cmd_pos("pipe_dia_01", -self.step_large)
             elif event.input == carb.input.KeyboardInput.I:
-                self.cmd_pos["pipe_dia_01"] += self.step_large
+                self._update_cmd_pos("pipe_dia_01", self.step_large)
             
             # 3. 前侧小臂 (J/K)
             elif event.input == carb.input.KeyboardInput.J:
-                self.cmd_pos["pipe_dia_02"] -= self.step_large
+                self._update_cmd_pos("pipe_dia_02", -self.step_large)
             elif event.input == carb.input.KeyboardInput.K:
-                self.cmd_pos["pipe_dia_02"] += self.step_large
+                self._update_cmd_pos("pipe_dia_02", self.step_large)
 
             # 4. 后侧大臂 (UP/DOWN)
             elif event.input == carb.input.KeyboardInput.UP:
-                self.cmd_pos["up_arms_01"] += self.step_small
+                self._update_cmd_pos("up_arms_01", self.step_small)
             elif event.input == carb.input.KeyboardInput.DOWN:
-                self.cmd_pos["up_arms_01"] -= self.step_small
+                self._update_cmd_pos("up_arms_01", -self.step_small)
 
             # 5. 前侧大臂 (LEFT/RIGHT)
             elif event.input == carb.input.KeyboardInput.RIGHT:
-                self.cmd_pos["up_arms_02"] += self.step_small
+                self._update_cmd_pos("up_arms_02", self.step_small)
             elif event.input == carb.input.KeyboardInput.LEFT:
-                self.cmd_pos["up_arms_02"] -= self.step_small
+                self._update_cmd_pos("up_arms_02", -self.step_small)
 
             # 6. 后侧弯折 (T/Y)
             elif event.input == carb.input.KeyboardInput.T:
-                self.cmd_pos["bend_01"] -= self.step_small
+                self._update_cmd_pos("bend_01", -self.step_small)
             elif event.input == carb.input.KeyboardInput.Y:
-                self.cmd_pos["bend_01"] += self.step_small
+                self._update_cmd_pos("bend_01", self.step_small)
             
             # 7. 前侧弯折 (G/H)
             elif event.input == carb.input.KeyboardInput.G:
-                self.cmd_pos["bend_02"] -= self.step_small
+                self._update_cmd_pos("bend_02", -self.step_small)
             elif event.input == carb.input.KeyboardInput.H:
-                self.cmd_pos["bend_02"] += self.step_small
+                self._update_cmd_pos("bend_02", self.step_small)
 
             # 8. 重置 (R)
             elif event.input == carb.input.KeyboardInput.R:

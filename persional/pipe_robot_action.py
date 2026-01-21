@@ -70,7 +70,8 @@ class LinkedArmAction(mdp.JointPositionAction):
         super().apply_actions()
         mid_targets = self.processed_actions
         # 计算并配置 tail targets
-        tail_targets = self._compute_tail_position(mid_targets)
+        current_mid = self._asset.data.joint_pos[:, self._joint_ids]
+        tail_targets = self._compute_tail_position(current_mid)
         self._asset.set_joint_position_target(tail_targets, joint_ids=self.tail_joint_idxs)
     def _compute_tail_position(self, mid_positions: torch.Tensor) -> torch.Tensor:
         """根据mid_arm位置计算tail_arm位置的自定义函数"""
