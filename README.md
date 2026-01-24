@@ -9,6 +9,10 @@
 - `pipe_robot_mini.urdf`: 最终导入IsaacLab中使用的，去除了无法形成闭链的几个连接点以及link，整体为最简形式
 - `pipe_robot_rename.urdf`: 基于mini版本进一步迭代而来,修改了其中的关节名称,  更合理的命名使得便于在IsaacLab中统一配置以及统一控制
 
+# 常用调试指令
+
+- 启动Demo程序并打开相机：`python ./06_pipe_ctrl.py --enable_cameras`
+
 # Template for Isaac Lab Projects
 
 ## Overview

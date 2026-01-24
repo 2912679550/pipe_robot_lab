@@ -9,6 +9,7 @@ AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
 args_cli = parser.parse_args()
 # launch omniverse app
+args_cli.enable_cameras = True
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
@@ -19,6 +20,7 @@ import omni.appwindow # 新增导入
 import math
 from isaaclab.envs import ManagerBasedRLEnv
 from pipe_robot_env import PipeRobotEnvCfg
+
 
 class PiprRobotDemo:
     def __init__(self, env: ManagerBasedRLEnv):
@@ -244,22 +246,26 @@ class PiprRobotDemo:
             self.needs_reset = False
             print("[INFO] Environment Reset Triggered.")
 
+        front_cam = self.env.scene["front_cam"]
+        back_cam = self.env.scene["back_cam"]
         
         count = 0
         while simulation_app.is_running():
             actions_list = []
             
-            # * --- Debug: Print cmd_vel periodically to ensure input is received ---
-            count += 1
-            if count % 50 == 0:
-                # 打印当前所有要下发的指令，包括self.cmd_vel和self.cmd_pos
-                print(  f"[CMD] Vel: ({self.cmd_vel[0]:.2f}, {self.cmd_vel[1]:.2f}) | "
-                        f"Pipe1: {self.cmd_pos['pipe_dia_01']:.2f} | "
-                        f"Pipe2: {self.cmd_pos['pipe_dia_02']:.2f} | "
-                        f"Arm1: {self.cmd_pos['up_arms_01']:.2f} | "
-                        f"Arm2: {self.cmd_pos['up_arms_02']:.2f} | "
-                        f"Bend1: {self.cmd_pos['bend_01']:.2f} | "
-                        f"Bend2: {self.cmd_pos['bend_02']:.2f}")
+            # # * --- Debug: Print cmd_vel periodically to ensure input is received ---
+            # count += 1
+            # if count % 50 == 0:
+            #     # 打印当前所有要下发的指令，包括self.cmd_vel和self.cmd_pos
+            #     print(  f"[CMD] Vel: ({self.cmd_vel[0]:.2f}, {self.cmd_vel[1]:.2f}) | "
+            #             f"Pipe1: {self.cmd_pos['pipe_dia_01']:.2f} | "
+            #             f"Pipe2: {self.cmd_pos['pipe_dia_02']:.2f} | "
+            #             f"Arm1: {self.cmd_pos['up_arms_01']:.2f} | "
+            #             f"Arm2: {self.cmd_pos['up_arms_02']:.2f} | "
+            #             f"Bend1: {self.cmd_pos['bend_01']:.2f} | "
+            #             f"Bend2: {self.cmd_pos['bend_02']:.2f}")
+            
+
 
             for term_name in self.term_names:
                 term = action_mgr.get_term(term_name)

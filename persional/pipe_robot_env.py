@@ -13,6 +13,8 @@ from pipe_robot_action import ActionsCfg
 from pipe_robot_obs import ObservationsCfg
 from pipe_robot_reward import RewardsCfg
 from pipe_robot_events import EventCfg, TerminationsCfg
+# 用于挂载相机与IMU
+from isaaclab.sensors import TiledCameraCfg , ImuCfg
 
 # =============================================================================
 # 1. 机器人资产配置 (Robot Asset Configuration)
@@ -97,7 +99,8 @@ PIPE_ROBOT_CFG = ArticulationCfg(
             stiffness=          1000.0,
             damping=            100.0,
         )
-    }
+    },
+
 )
 
 
@@ -117,8 +120,8 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
         spawn=sim_utils.DistantLightCfg(intensity=5000.0)
     )
     # 管道障碍物 (静态)
-    pipe_obstacle = AssetBaseCfg(
-        prim_path="/World/PipeObstacle",
+    pipe_obstacle01 = AssetBaseCfg(
+        prim_path="/World/PipeObstacle1",
         spawn=sim_utils.CylinderCfg(
             radius=0.18,        # 直径 360mm
             height=2.0,         # 长度 2m
@@ -126,8 +129,8 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
             collision_props=sim_utils.CollisionPropertiesCfg(),
             # 配置高摩擦力材质
             physics_material=sim_utils.RigidBodyMaterialCfg(
-                static_friction=2.0,   # 静摩擦系数
-                dynamic_friction=2.0,  # 动摩擦系数
+                static_friction=1.0,   # 静摩擦系数
+                dynamic_friction=1.0,  # 动摩擦系数
                 restitution=0.0,       # 恢复系数(0表示不反弹)
             ),
         ),
@@ -136,8 +139,66 @@ class PipeRobotSceneCfg(InteractiveSceneCfg):
             rot=(0.70711, 0.70711, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
         ),
     )
+    pipe_obstacle02 = AssetBaseCfg(
+        prim_path="/World/PipeObstacle2",
+        spawn=sim_utils.CylinderCfg(
+            radius=0.18,        # 直径 360mm
+            height=2.0,         # 长度 2m
+            rigid_props=None,   # 静态 (Static)
+            collision_props=sim_utils.CollisionPropertiesCfg(),
+            # 配置高摩擦力材质
+            physics_material=sim_utils.RigidBodyMaterialCfg(
+                static_friction=1.0,   # 静摩擦系数
+                dynamic_friction=1.0,  # 动摩擦系数
+                restitution=0.0,       # 恢复系数(0表示不反弹)
+            ),
+        ),
+        init_state=AssetBaseCfg.InitialStateCfg(
+            pos=(0.0, 1.0, 1.5), # 中心位置
+            rot=(1, 0.0, 0.0, 0.0), # 沿Y轴放置 (绕X轴转90度)
+        ),
+    )
     # 机器人 (必须使用 {ENV_REGEX_NS} 占位符)
     robot: ArticulationCfg = PIPE_ROBOT_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+    
+    back_cam = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/BM_02_link_cam/cam_back",
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)), # 绕 z 轴旋转 180 度修正倒立 (w, x, y, z)
+        update_period=0.1,  # 10Hz
+        height=240,
+        width=320,
+        data_types=["depth"],  # Intel D435i 深度流
+        debug_vis=True,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=1.93,          # 对应 D435i 约 1.93mm 焦距
+            horizontal_aperture=3.8,    # 对应约 86° 水平 FOV
+            vertical_aperture=2.39,     # 对应约 57° 垂直 FOV
+            clipping_range=(0.1, 10.0), # D435i 有效深度范围
+        ),
+    )
+    front_cam = TiledCameraCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/FM_25_link_cam/cam_front",
+        offset=TiledCameraCfg.OffsetCfg(pos=(0.0, 0.0, 0.0), rot=(0.0, 0.0, 0.0, 1.0)), # 绕 z 轴旋转 180 度修正倒立 (w, x, y, z)
+        update_period=0.1,  # 10Hz
+        height=240,
+        width=320,
+        data_types=["depth"],  # Intel D435i 深度流
+        debug_vis=True,
+        spawn=sim_utils.PinholeCameraCfg(
+            focal_length=1.93,          # 对应 D435i 约 1.93mm 焦距
+            horizontal_aperture=3.8,    # 对应约 86° 水平 FOV
+            vertical_aperture=2.39,     # 对应约 57° 垂直 FOV
+            clipping_range=(0.1, 10.0), # D435i 有效深度范围
+        ),
+    )
+    back_imu = ImuCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/BM_03_link_imu",
+        update_period=0.005,           # 200Hz
+    )
+    front_imu = ImuCfg(
+        prim_path="{ENV_REGEX_NS}/Robot/FM_26_link_imu",
+        update_period=0.005,           # 200Hz
+    )
 
 
 # =============================================================================
@@ -163,6 +224,8 @@ class PipeRobotEnvCfg(ManagerBasedRLEnvCfg):
     # 仿真参数
     sim: sim_utils.SimulationCfg = sim_utils.SimulationCfg(
         dt=0.01, # 物理步长 10ms
-        render_interval=1, # 每步都渲染，保证流畅交互
+        render_interval = 1, # 这里最好和相机帧率对应
+        # gravity=(0.0, 0.0, 0.0),
+        gravity=(0.0, 0.0, -9.81),
     )
     decimation = 1 # 决策频率 = 物理频率
